@@ -1,25 +1,45 @@
 import JSZip from 'jszip';
+import { parseCssToReactPdf, StyleMap } from './cssToReactPdf';
+
+// =============================================================================
+// CONTENT NODE - Tree structure for HTML content
+// =============================================================================
+
+export interface ContentNode {
+  type: 'container' | 'text';
+  tagName: string;
+  classNames: string[];
+  text?: string;            // for text nodes only
+  children?: ContentNode[]; // for containers only
+}
+
+// Keep StyledElement for backwards compatibility (used in convert.tsx)
+export interface StyledElement {
+  text: string;
+  tagName: string;
+  classNames: string[];
+}
 
 export interface Chapter {
   title: string;
-  content: string[];
+  content: ContentNode;  // tree root
   type: 'titlepage' | 'frontmatter' | 'chapter' | 'backmatter';
-  author?: string; // For title pages
+  author?: string;
 }
 
 export interface ParsedEpub {
   title: string;
   author: string;
   chapters: Chapter[];
+  styleMap: StyleMap;
 }
+
+// =============================================================================
+// MAIN PARSER
+// =============================================================================
 
 /**
  * Parse an EPUB file and extract its content
- *
- * EPUB structure:
- * - META-INF/container.xml -> points to OPF file location
- * - OPF file (e.g., content.opf) -> metadata + spine (reading order)
- * - Chapter files (XHTML/HTML) -> actual content
  */
 export async function parseEpub(epubData: Uint8Array): Promise<ParsedEpub> {
   const zip = await JSZip.loadAsync(epubData);
@@ -35,7 +55,6 @@ export async function parseEpub(epubData: Uint8Array): Promise<ParsedEpub> {
     throw new Error('Invalid EPUB: could not find OPF path');
   }
 
-  // Get the base directory for resolving relative paths
   const opfDir = opfPath.includes('/') ? opfPath.substring(0, opfPath.lastIndexOf('/') + 1) : '';
 
   // 2. Read and parse OPF file
@@ -46,25 +65,31 @@ export async function parseEpub(epubData: Uint8Array): Promise<ParsedEpub> {
 
   const { title, author, spineItems, manifest } = parseOpf(opfContent);
 
-  // 3. Read each chapter in spine order and extract text
+  // 3. Extract and parse CSS
+  const cssText = await extractCss(zip, opfDir, manifest);
+  console.log('=== EXTRACTED CSS ===');
+  console.log('CSS length:', cssText.length);
+  console.log('First 500 chars:', cssText.substring(0, 500));
+  const styleMap = parseCssToReactPdf(cssText);
+
+  // 4. Read each chapter in spine order
   const chapters: Chapter[] = [];
 
   for (const itemId of spineItems) {
     const item = manifest.get(itemId);
     if (!item) continue;
 
-    // Resolve the full path
     const chapterPath = opfDir + item.href;
     const chapterContent = await zip.file(chapterPath)?.async('text');
 
     if (chapterContent) {
-      const { chapterTitle, paragraphs, pageType, author: chapterAuthor } = extractTextFromHtml(chapterContent);
+      const { chapterTitle, contentTree, pageType, author: chapterAuthor } = parseHtmlToTree(chapterContent);
 
-      // Only add chapters that have content (or are title pages)
-      if (paragraphs.length > 0 || pageType === 'titlepage') {
+      // Only include if there's content or it's a title page
+      if (hasTextContent(contentTree) || pageType === 'titlepage') {
         chapters.push({
           title: chapterTitle || `Chapter ${chapters.length + 1}`,
-          content: paragraphs,
+          content: contentTree,
           type: pageType,
           author: chapterAuthor,
         });
@@ -76,14 +101,58 @@ export async function parseEpub(epubData: Uint8Array): Promise<ParsedEpub> {
     title: title || 'Untitled',
     author: author || 'Unknown Author',
     chapters,
+    styleMap,
   };
 }
+
+/**
+ * Check if a content tree has any text
+ */
+function hasTextContent(node: ContentNode): boolean {
+  if (node.type === 'text' && node.text && node.text.trim().length > 0) {
+    return true;
+  }
+  if (node.children) {
+    return node.children.some(child => hasTextContent(child));
+  }
+  return false;
+}
+
+// =============================================================================
+// CSS EXTRACTION
+// =============================================================================
+
+/**
+ * Extract all CSS from EPUB
+ */
+async function extractCss(
+  zip: JSZip,
+  opfDir: string,
+  manifest: Map<string, { href: string; mediaType: string }>
+): Promise<string> {
+  let combinedCss = '';
+
+  for (const [, item] of manifest) {
+    if (item.mediaType === 'text/css' || item.href.endsWith('.css')) {
+      const cssPath = opfDir + item.href;
+      const cssContent = await zip.file(cssPath)?.async('text');
+      if (cssContent) {
+        combinedCss += cssContent + '\n';
+      }
+    }
+  }
+
+  return combinedCss;
+}
+
+// =============================================================================
+// OPF PARSING
+// =============================================================================
 
 /**
  * Extract OPF file path from container.xml
  */
 function extractOpfPath(containerXml: string): string | null {
-  // Look for: <rootfile full-path="..." media-type="application/oebps-package+xml"/>
   const match = containerXml.match(/full-path=["']([^"']+)["']/);
   return match ? match[1] : null;
 }
@@ -97,15 +166,12 @@ function parseOpf(opfContent: string): {
   spineItems: string[];
   manifest: Map<string, { href: string; mediaType: string }>;
 } {
-  // Extract title
   const titleMatch = opfContent.match(/<dc:title[^>]*>([^<]+)<\/dc:title>/i);
   const title = titleMatch ? decodeHtmlEntities(titleMatch[1].trim()) : '';
 
-  // Extract author (creator)
   const authorMatch = opfContent.match(/<dc:creator[^>]*>([^<]+)<\/dc:creator>/i);
   const author = authorMatch ? decodeHtmlEntities(authorMatch[1].trim()) : '';
 
-  // Build manifest map: id -> { href, mediaType }
   const manifest = new Map<string, { href: string; mediaType: string }>();
   const manifestRegex = /<item\s+[^>]*id=["']([^"']+)["'][^>]*href=["']([^"']+)["'][^>]*(?:media-type=["']([^"']+)["'])?[^>]*\/?>/gi;
   let manifestMatch;
@@ -117,7 +183,6 @@ function parseOpf(opfContent: string): {
     manifest.set(id, { href, mediaType });
   }
 
-  // Also try alternate attribute order (href before id)
   const manifestRegex2 = /<item\s+[^>]*href=["']([^"']+)["'][^>]*id=["']([^"']+)["'][^>]*(?:media-type=["']([^"']+)["'])?[^>]*\/?>/gi;
   while ((manifestMatch = manifestRegex2.exec(opfContent)) !== null) {
     const href = decodeURIComponent(manifestMatch[1]);
@@ -128,7 +193,6 @@ function parseOpf(opfContent: string): {
     }
   }
 
-  // Extract spine items (reading order)
   const spineItems: string[] = [];
   const spineRegex = /<itemref\s+[^>]*idref=["']([^"']+)["'][^>]*\/?>/gi;
   let spineMatch;
@@ -140,23 +204,45 @@ function parseOpf(opfContent: string): {
   return { title, author, spineItems, manifest };
 }
 
+// =============================================================================
+// HTML TO TREE PARSER
+// =============================================================================
+
+// Container elements that should preserve structure
+const CONTAINER_TAGS = new Set([
+  'div', 'section', 'article', 'blockquote', 'aside', 'nav',
+  'header', 'footer', 'main', 'figure', 'figcaption'
+]);
+
+// Text elements that contain readable content
+// NOTE: h1-h6 are excluded because we extract them separately as chapter.title
+const TEXT_TAGS = new Set([
+  'p', 'span', 'li'
+]);
+
+// Self-closing tags to skip
+const VOID_TAGS = new Set([
+  'br', 'hr', 'img', 'input', 'meta', 'link', 'area', 'base',
+  'col', 'embed', 'param', 'source', 'track', 'wbr'
+]);
+
 /**
- * Extract text content from HTML/XHTML chapter
+ * Parse HTML into a ContentNode tree
  */
-function extractTextFromHtml(html: string): {
+function parseHtmlToTree(html: string): {
   chapterTitle: string;
-  paragraphs: string[];
+  contentTree: ContentNode;
   pageType: 'titlepage' | 'frontmatter' | 'chapter' | 'backmatter';
   author?: string;
 } {
-  // Detect page type from epub:type attributes
+  // Detect page type
   const isTitlePage = /epub:type=["'][^"']*titlepage[^"']*["']/.test(html);
   const isCopyright = /epub:type=["'][^"']*copyright[^"']*["']/.test(html);
   const isToc = /epub:type=["'][^"']*toc[^"']*["']/.test(html);
   const isEpubFrontMatter = /epub:type=["'][^"']*(dedication|preface|foreword|prologue)[^"']*["']/.test(html);
   const isEpubBackMatter = /epub:type=["'][^"']*(afterword|colophon|acknowledgment|epilogue)[^"']*["']/.test(html);
 
-  // Try to extract chapter title from h1
+  // Extract title and author
   let chapterTitle = '';
   let author = '';
 
@@ -170,72 +256,13 @@ function extractTextFromHtml(html: string): {
     chapterTitle = cleanText(titleMatch[1]);
   }
 
-  // For title pages, h2 is usually the author
   if (isTitlePage && h2Match) {
     author = cleanText(h2Match[1]);
   } else if (!isTitlePage && h2Match && !h1Match) {
-    // For regular chapters without h1, use h2 as title
     chapterTitle = cleanText(h2Match[1]);
   }
 
-  // Extract paragraphs
-  const paragraphs: string[] = [];
-
-  // Match <p> tags and extract content
-  const pRegex = /<p[^>]*>([\s\S]*?)<\/p>/gi;
-  let pMatch;
-
-  while ((pMatch = pRegex.exec(html)) !== null) {
-    const text = cleanText(pMatch[1]);
-    // Skip if text is same as title or author (avoid duplicates)
-    if (text.length > 0 && text !== chapterTitle && text !== author) {
-      paragraphs.push(text);
-    }
-  }
-
-  // If no <p> tags found, try to extract content
-  if (paragraphs.length === 0) {
-    if (isTitlePage) {
-      // For title pages, extract each span as separate line (preserves credits formatting)
-      const spanRegex = /<span[^>]*>([\s\S]*?)<\/span>/gi;
-      let spanMatch;
-      while ((spanMatch = spanRegex.exec(html)) !== null) {
-        const text = cleanText(spanMatch[1]);
-        if (text.length > 0 && text !== chapterTitle && text !== author) {
-          paragraphs.push(text);
-        }
-      }
-    } else {
-      // For non-title pages, extract from divs
-      const divRegex = /<div[^>]*>([\s\S]*?)<\/div>/gi;
-      let divMatch;
-      while ((divMatch = divRegex.exec(html)) !== null) {
-        const text = cleanText(divMatch[1]);
-        if (text.length > 0 && text !== chapterTitle && text !== author) {
-          paragraphs.push(text);
-        }
-      }
-    }
-  }
-
-  // If still no content, try body
-  if (paragraphs.length === 0) {
-    const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
-    if (bodyMatch) {
-      const bodyText = cleanText(bodyMatch[1]);
-      if (bodyText.length > 0) {
-        const parts = bodyText.split(/\n\n+/);
-        for (const part of parts) {
-          const trimmed = part.trim();
-          if (trimmed.length > 0 && trimmed !== chapterTitle && trimmed !== author) {
-            paragraphs.push(trimmed);
-          }
-        }
-      }
-    }
-  }
-
-  // Determine page type - fallback to title patterns if epub:type not present
+  // Determine page type
   const isFrontMatterByTitle = /^(copyright|table of contents|contents|dedication|preface|foreword|introduction|prologue)$/i.test(chapterTitle.trim());
   const isBackMatterByTitle = /^(about the author|acknowledgments?|afterword|epilogue|appendix|notes|bibliography|index)$/i.test(chapterTitle.trim());
 
@@ -248,7 +275,188 @@ function extractTextFromHtml(html: string): {
     pageType = 'backmatter';
   }
 
-  return { chapterTitle, paragraphs, pageType, author: author || undefined };
+  // Extract body content
+  const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  const bodyHtml = bodyMatch ? bodyMatch[1] : html;
+
+  // Parse into tree
+  const contentTree = parseElement(bodyHtml, 'body', []);
+
+  return {
+    chapterTitle,
+    contentTree,
+    pageType,
+    author: author || undefined,
+  };
+}
+
+/**
+ * Parse an HTML string into a ContentNode
+ */
+function parseElement(html: string, tagName: string, classNames: string[]): ContentNode {
+  const children: ContentNode[] = [];
+
+  // Tokenize: find all tags and text between them
+  const tagRegex = /<(\/?)(\w+)([^>]*)>/g;
+  let lastIndex = 0;
+  let match;
+
+  const stack: { tagName: string; classNames: string[]; children: ContentNode[]; startIndex: number }[] = [];
+
+  while ((match = tagRegex.exec(html)) !== null) {
+    const [fullMatch, isClosing, matchTagName, attributes] = match;
+    const tagLower = matchTagName.toLowerCase();
+
+    // Text before this tag
+    if (match.index > lastIndex) {
+      const textBetween = html.slice(lastIndex, match.index);
+      const cleanedText = cleanText(textBetween);
+      if (cleanedText.length > 0 && stack.length === 0) {
+        // Top-level text
+        children.push({
+          type: 'text',
+          tagName: 'span',
+          classNames: [],
+          text: cleanedText,
+        });
+      }
+    }
+
+    lastIndex = match.index + fullMatch.length;
+
+    // Skip void tags
+    if (VOID_TAGS.has(tagLower)) {
+      continue;
+    }
+
+    // Skip script, style, head, and headings (h1-h6 are extracted separately as chapter.title)
+    if (!isClosing && ['script', 'style', 'head', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(tagLower)) {
+      // Find closing tag and skip content
+      const closeRegex = new RegExp(`</${tagLower}>`, 'i');
+      const closeMatch = closeRegex.exec(html.slice(lastIndex));
+      if (closeMatch) {
+        lastIndex = lastIndex + closeMatch.index + closeMatch[0].length;
+        tagRegex.lastIndex = lastIndex;
+      }
+      continue;
+    }
+
+    if (isClosing) {
+      // Closing tag - pop from stack
+      if (stack.length > 0 && stack[stack.length - 1].tagName === tagLower) {
+        const item = stack.pop()!;
+        const innerHtml = html.slice(item.startIndex, match.index);
+
+        // Parse the inner content
+        const node = parseElementContent(innerHtml, item.tagName, item.classNames);
+
+        if (stack.length === 0) {
+          // Add to top-level children
+          children.push(node);
+        } else {
+          // Add to parent on stack
+          stack[stack.length - 1].children.push(node);
+        }
+      }
+    } else {
+      // Opening tag
+      const elementClasses = extractClassNames(attributes);
+
+      // Check for self-closing syntax
+      const isSelfClosing = attributes.trim().endsWith('/');
+
+      if (isSelfClosing) {
+        continue;
+      }
+
+      // Push to stack for container and text tags
+      if (CONTAINER_TAGS.has(tagLower) || TEXT_TAGS.has(tagLower)) {
+        stack.push({
+          tagName: tagLower,
+          classNames: elementClasses,
+          children: [],
+          startIndex: lastIndex,
+        });
+      }
+    }
+  }
+
+  // Handle any remaining text
+  if (lastIndex < html.length) {
+    const remainingText = cleanText(html.slice(lastIndex));
+    if (remainingText.length > 0 && stack.length === 0) {
+      children.push({
+        type: 'text',
+        tagName: 'span',
+        classNames: [],
+        text: remainingText,
+      });
+    }
+  }
+
+  return {
+    type: 'container',
+    tagName,
+    classNames,
+    children,
+  };
+}
+
+/**
+ * Parse element content into a ContentNode
+ */
+function parseElementContent(innerHtml: string, tagName: string, classNames: string[]): ContentNode {
+  // Check if this is a text element
+  if (TEXT_TAGS.has(tagName)) {
+    // For text elements, extract text but also check for nested structure
+    const hasNestedTags = /<(div|blockquote|section|p)\b/i.test(innerHtml);
+
+    if (!hasNestedTags) {
+      // Simple text element
+      const text = cleanText(innerHtml);
+      return {
+        type: 'text',
+        tagName,
+        classNames,
+        text,
+      };
+    }
+  }
+
+  // Container element - recursively parse children
+  const parsed = parseElement(innerHtml, tagName, classNames);
+
+  // If no children were found but there's text, treat as text node
+  // BUT skip if the text came from h1-h6 (which we intentionally skip)
+  if (parsed.children && parsed.children.length === 0) {
+    const hasSkippedHeading = /<h[1-6]\b/i.test(innerHtml);
+    if (!hasSkippedHeading) {
+      const text = cleanText(innerHtml);
+      if (text.length > 0) {
+        return {
+          type: 'text',
+          tagName,
+          classNames,
+          text,
+        };
+      }
+    }
+  }
+
+  return parsed;
+}
+
+// =============================================================================
+// UTILITIES
+// =============================================================================
+
+/**
+ * Extract class names from HTML attributes string
+ */
+function extractClassNames(attributes: string): string[] {
+  const classMatch = attributes.match(/class=["']([^"']+)["']/i);
+  if (!classMatch) return [];
+  return classMatch[1].split(/\s+/).filter(c => c.length > 0);
 }
 
 /**
@@ -256,9 +464,7 @@ function extractTextFromHtml(html: string): {
  */
 function cleanText(html: string): string {
   return html
-    // Remove HTML tags
     .replace(/<[^>]+>/g, ' ')
-    // Decode HTML entities
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
@@ -268,7 +474,6 @@ function cleanText(html: string): string {
     .replace(/&apos;/g, "'")
     .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code, 10)))
     .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCharCode(parseInt(code, 16)))
-    // Normalize whitespace
     .replace(/\s+/g, ' ')
     .trim();
 }

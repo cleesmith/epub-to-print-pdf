@@ -4,12 +4,13 @@ import React from 'react';
 import path from 'path';
 import { renderToBuffer, Font } from '@react-pdf/renderer';
 import { Page, Text, View, Document, StyleSheet } from '@react-pdf/renderer';
-import { parseEpub } from '@/lib/epubParser';
+import { parseEpub, ContentNode } from '@/lib/epubParser';
+import { getStylesForElement, StyleMap } from '@/lib/cssToReactPdf';
 
-// Chapter type for BookDocument
+// Chapter type for BookDocument (matches epubParser)
 interface Chapter {
   title: string;
-  content: string[];
+  content: ContentNode;
   type: 'titlepage' | 'frontmatter' | 'chapter' | 'backmatter';
   author?: string;
 }
@@ -53,7 +54,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   paragraph: {
-    marginBottom: 12,
     textAlign: 'justify',
   },
   // Title page styles - proper layout like KDP
@@ -114,14 +114,87 @@ const styles = StyleSheet.create({
   },
 });
 
+// =============================================================================
+// RECURSIVE NODE RENDERER
+// =============================================================================
+
+/**
+ * Recursively render a ContentNode tree to react-pdf components
+ */
+function renderNode(
+  node: ContentNode,
+  styleMap: StyleMap,
+  key: string,
+  debugLog: boolean = false
+): React.ReactNode {
+  // Get CSS styles for this node
+  const cssStyles = getStylesForElement(styleMap, node.tagName, node.classNames);
+
+  if (debugLog) {
+    console.log(`=== NODE ${key} ===`);
+    console.log(`  type: ${node.type}, tag: ${node.tagName}, classes: [${node.classNames.join(', ')}]`);
+    console.log(`  cssStyles:`, cssStyles);
+  }
+
+  if (node.type === 'text') {
+    // Text node - render as Text with paragraph base style + CSS styles
+    return (
+      <Text key={key} style={[styles.paragraph, cssStyles]}>
+        {node.text}
+      </Text>
+    );
+  }
+
+  // Container node - render as View with CSS styles, recursively render children
+  // Skip the 'body' wrapper - just render its children
+  if (node.tagName === 'body' && node.children) {
+    return (
+      <View key={key}>
+        {node.children.map((child, i) => renderNode(child, styleMap, `${key}-${i}`, debugLog && i < 3))}
+      </View>
+    );
+  }
+
+  return (
+    <View key={key} style={cssStyles}>
+      {node.children?.map((child, i) => renderNode(child, styleMap, `${key}-${i}`, debugLog && i < 3))}
+    </View>
+  );
+}
+
+/**
+ * Extract text from a ContentNode tree (for title page credits)
+ */
+function extractTextFromTree(node: ContentNode): string[] {
+  const texts: string[] = [];
+
+  if (node.type === 'text' && node.text) {
+    texts.push(node.text);
+  }
+
+  if (node.children) {
+    for (const child of node.children) {
+      texts.push(...extractTextFromTree(child));
+    }
+  }
+
+  return texts;
+}
+
+// =============================================================================
+// BOOK DOCUMENT COMPONENT
+// =============================================================================
+
 const BookDocument = ({
   chapters,
   title,
   author,
+  styleMap,
 }: {
   chapters: Chapter[];
   title: string;
   author: string;
+  styleMap: StyleMap;
 }) => {
   // Separate chapters by type
   const titlePages = chapters.filter((ch) => ch.type === 'titlepage');
@@ -132,35 +205,38 @@ const BookDocument = ({
   return (
     <Document pageLayout="twoPageLeft">
       {/* Title pages - proper KDP layout */}
-      {titlePages.map((chapter, idx) => (
-        <Page key={`title-${idx}`} size={KDP_6x9} style={styles.page}>
-          <View style={styles.titlePage}>
-            {/* Title in upper area with underline */}
-            <View style={styles.titlePageTitleSection}>
-              <Text style={styles.titlePageTitle}>{chapter.title}</Text>
-              <View style={styles.titlePageUnderline} />
+      {titlePages.map((chapter, idx) => {
+        const creditTexts = extractTextFromTree(chapter.content);
+        return (
+          <Page key={`title-${idx}`} size={KDP_6x9} style={styles.page}>
+            <View style={styles.titlePage}>
+              {/* Title in upper area with underline */}
+              <View style={styles.titlePageTitleSection}>
+                <Text style={styles.titlePageTitle}>{chapter.title}</Text>
+                <View style={styles.titlePageUnderline} />
+              </View>
+
+              {/* Author in middle */}
+              {chapter.author && (
+                <View style={styles.titlePageAuthorSection}>
+                  <Text style={styles.titlePageAuthor}>{chapter.author}</Text>
+                </View>
+              )}
+
+              {/* Credits at bottom */}
+              {creditTexts.length > 0 && (
+                <View style={styles.titlePageCreditsSection}>
+                  {creditTexts.map((text, lineIdx) => (
+                    <Text key={lineIdx} style={styles.titlePageCredits}>
+                      {text}
+                    </Text>
+                  ))}
+                </View>
+              )}
             </View>
-
-            {/* Author in middle */}
-            {chapter.author && (
-              <View style={styles.titlePageAuthorSection}>
-                <Text style={styles.titlePageAuthor}>{chapter.author}</Text>
-              </View>
-            )}
-
-            {/* Credits at bottom */}
-            {chapter.content.length > 0 && (
-              <View style={styles.titlePageCreditsSection}>
-                {chapter.content.map((line, lineIdx) => (
-                  <Text key={lineIdx} style={styles.titlePageCredits}>
-                    {line}
-                  </Text>
-                ))}
-              </View>
-            )}
-          </View>
-        </Page>
-      ))}
+          </Page>
+        );
+      })}
 
       {/* Front matter - NO headers */}
       {frontMatter.length > 0 && (
@@ -173,11 +249,7 @@ const BookDocument = ({
           {frontMatter.map((chapter, chapterIndex) => (
             <View key={chapterIndex} break={chapterIndex > 0}>
               <Text style={styles.chapterTitle}>{chapter.title}</Text>
-              {chapter.content.map((para, paraIndex) => (
-                <Text key={paraIndex} style={styles.paragraph}>
-                  {para}
-                </Text>
-              ))}
+              {renderNode(chapter.content, styleMap, `fm-${chapterIndex}`)}
             </View>
           ))}
         </Page>
@@ -206,11 +278,7 @@ const BookDocument = ({
           {storyChapters.map((chapter, chapterIndex) => (
             <View key={chapterIndex} break={chapterIndex > 0}>
               <Text style={styles.chapterTitle}>{chapter.title}</Text>
-              {chapter.content.map((para, paraIndex) => (
-                <Text key={paraIndex} style={styles.paragraph}>
-                  {para}
-                </Text>
-              ))}
+              {renderNode(chapter.content, styleMap, `ch-${chapterIndex}`, chapterIndex === 0)}
             </View>
           ))}
         </Page>
@@ -227,11 +295,7 @@ const BookDocument = ({
           {backMatter.map((chapter, chapterIndex) => (
             <View key={chapterIndex} break={chapterIndex > 0}>
               <Text style={styles.chapterTitle}>{chapter.title}</Text>
-              {chapter.content.map((para, paraIndex) => (
-                <Text key={paraIndex} style={styles.paragraph}>
-                  {para}
-                </Text>
-              ))}
+              {renderNode(chapter.content, styleMap, `bm-${chapterIndex}`)}
             </View>
           ))}
         </Page>
@@ -239,6 +303,10 @@ const BookDocument = ({
     </Document>
   );
 };
+
+// =============================================================================
+// MAIN CONVERSION FUNCTION
+// =============================================================================
 
 export interface ConvertResult {
   success: boolean;
@@ -268,6 +336,7 @@ export async function convertEpubToPdf(
         chapters={parsed.chapters}
         title={parsed.title}
         author={parsed.author}
+        styleMap={parsed.styleMap}
       />
     );
 
