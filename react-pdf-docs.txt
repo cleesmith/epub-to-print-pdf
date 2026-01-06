@@ -1,0 +1,2345 @@
+========== quick-start.md ==========
+import EditButton from ‘../src/components/Docs/EditButton’ import
+GoToExample from ‘../src/components/Docs/GoToExample’ import
+NavigationButtons from ‘../src/components/Docs/NavigationButtons’
+
+1. Install React and react-pdf
+
+Starting with react-pdf is extremely simple.
+
+Using npm
+
+    npm install @react-pdf/renderer --save
+
+Using Yarn
+
+    yarn add @react-pdf/renderer
+
+Using pnpm
+
+    pnpm add @react-pdf/renderer
+
+Using Bun
+
+    bun add @react-pdf/renderer
+
+Since a renderer simply implements how elements render into something,
+you still need to have React to make it work (and react-dom for
+client-side document generation). You can find instructions on how to do
+that here.
+
+2. Create your PDF document
+
+This is where things start getting interesting. React-pdf exports a set
+of React primitives that enable you to render things into your document
+very easily. It also has an API for styling them, using CSS properties
+and Flexbox layout.
+
+Let’s make the code speak for itself:
+
+    import React from 'react';
+    import { Page, Text, View, Document, StyleSheet } from '@react-pdf/renderer';
+
+    // Create styles
+    const styles = StyleSheet.create({
+      page: {
+        flexDirection: 'row',
+        backgroundColor: '#E4E4E4'
+      },
+      section: {
+        margin: 10,
+        padding: 10,
+        flexGrow: 1
+      }
+    });
+
+    // Create Document Component
+    const MyDocument = () => (
+      <Document>
+        <Page size="A4" style={styles.page}>
+          <View style={styles.section}>
+            <Text>Section #1</Text>
+          </View>
+          <View style={styles.section}>
+            <Text>Section #2</Text>
+          </View>
+        </Page>
+      </Document>
+    );
+
+This will produce a PDF document with a single page. Inside, two
+different blocks, each of them rendering a different text. These are not
+the only valid primitives you can use. Please refer to the Components or
+Examples sections for more information.
+
+3. Choose where to render the document
+
+React-pdf enables you to render the document in two different
+environments: web and server. The process is essentially the same, but
+catered to needs of each environment.
+
+Save in a file
+
+    import ReactPDF from '@react-pdf/renderer';
+
+    ReactPDF.render(<MyDocument />, `${__dirname}/example.pdf`);
+
+Render to a stream
+
+    import ReactPDF from '@react-pdf/renderer';
+
+    ReactPDF.renderToStream(<MyDocument />);
+
+Render in DOM
+
+    import React from 'react';
+    import ReactDOM from 'react-dom';
+    import { PDFViewer } from '@react-pdf/renderer';
+
+    const App = () => (
+      <PDFViewer>
+        <MyDocument />
+      </PDFViewer>
+    );
+
+    ReactDOM.render(<App />, document.getElementById('root'));
+
+4. Have fun!
+
+Maybe the most important step — make use of all react-pdf capabilities
+to create beautiful and awesome documents!
+
+========== compatibility.md ==========
+import EditButton from ‘../src/components/Docs/EditButton’ import
+NavigationButtons from ‘../src/components/Docs/NavigationButtons’
+
+Compatibility with Node.js
+
+We currently test react-pdf against Node.js 18, 20, and 21 (latest
+minors), so these are the versions we recommend using. Chances are you
+may use react-pdf with older versions of Node.js as well, but we can’t
+guarantee it will work as expected.
+
+Compatibility with Bun
+
+While we don’t officially support Bun, we have received reports that it
+works well with react-pdf.
+
+Compatibility with React
+
+@react-pdf/renderer is compatible with React 16 (16.8.0 or later), React
+17, React 18 and React 19 (since v4.1.0)
+
+Compatibility with Next.js
+
+In general, you may use react-pdf with Next.js regardless of the
+version. However, before Next.js 14.1.1, Next.js (App Router) suffered
+from a bug that caused the Next.js server to crash when using react-pdf.
+If you encounter:
+
+    TypeError: ba.Component is not a constructor
+
+You should upgrade to Next.js 14.1.1 or later.
+
+If that’s not possible, update your Next.js config like this:
+
+    const nextConfig = {
+      // …
+      experimental: {
+        // …
+        serverComponentsExternalPackages: ['@react-pdf/renderer'],
+      },
+    };
+
+Compatibility with esbuild
+
+If you are using esbuild to bundle your react-pdf application in ESM
+mode, you may encounter an error:
+
+    __dirname is not defined in ES module scope
+
+This is because our dependency, Yoga layout, uses __dirname in their
+code.
+
+This will be fixed by the upcoming release of Yoga layout, but for now,
+you can work around this issue by using the inject option in esbuild.
+
+Create a file called cjs-shim.ts:
+
+    import { createRequire } from 'node:module';
+    import path from 'node:path';
+    import url from 'node:url';
+
+    globalThis.require = createRequire(import.meta.url);
+    globalThis.__filename = url.fileURLToPath(import.meta.url);
+    globalThis.__dirname = path.dirname(__filename);
+
+Then, add it to your esbuild.ts:
+
+    await esbuild.build({
+      // …
+      inject: ['cjs-shim.ts'],
+    });
+
+And you should be good to go!
+
+========== rendering-process.md ==========
+import EditButton from ‘../src/components/Docs/EditButton’ import
+OverviewTimeline from ‘../src/components/Docs/OverviewTimeline’ import
+NavigationButtons from ‘../src/components/Docs/NavigationButtons’
+
+Rendering process overview
+
+At a high level, the document creation process is composed by 6 concrete
+steps.
+
+1. Internal structures creation
+
+The first step involves transforming the React element tree into the
+appropriate internal instances for each component type. This involves
+saving the relationship between these (parent-child) nodes.
+
+Besides Document, all nodes will represent a block inside a document,
+with a height, width, paddings and margins (yet to be discovered).
+
+From now on, react-pdf works over this data structure to start inferring
+where each block goes inside the final document.
+
+2. Resolve styles
+
+This step involves pre-processing node styles, as well as defining
+default values for the needed properties that were not provided by the
+user. This way, all successive steps can work on the basis that all
+required styles are defined in the tree.
+
+Part of the pre-processing involves unit conversion, style inheritance
+and styles expansion.
+
+3. Fetching assets
+
+Time to ask for all needed resources! We traverse the internal nodes
+tree fetching any required font, image or emoji.
+
+We run all these requests asynchronously, but we won’t move forward
+until all requests are finished (with success or failure).
+
+4. Layout text
+
+Now that we have all fonts loaded, we can layout text into paragraphs.
+This is a critical and complex step: we first convert characters into
+glyphs using the appropriate font family and size, embed images or emoji
+images if present and ultimately break them into lines either on
+whitespaces or by breaking words based on language (or custom) rules.
+
+5. Wrapping pages
+
+This is the most time-consuming step, since it involves not just
+calculating where each element is in the document and how much space it
+will need, but also splitting these elements into different pages.
+
+We internally use Yoga layout to compute node’s size and coordinates
+inside the document, and perform page breaking based on a set of
+customizable heuristics.
+
+6. Rendering
+
+The creation of the PDF document itself. For this task, we use the
+awesome pdfkit.
+
+Once in this stage, we have our internal tree structure with all the
+needed data to generate our document. All it remains is deciding what we
+want to do with this data. This will vary depending on the binding you
+are using, but basically it means either displaying or saving it.
+
+========== components.md ==========
+import EditButton from ‘../src/components/Docs/EditButton’ import
+NavigationButtons from ‘../src/components/Docs/NavigationButtons’
+
+Components
+
+React-pdf follows the React primitives specification, making the
+learning process very straightforward if you come from another React
+environment (such as react-native). Additionally, it implements custom
+Component types that allow you to structure your PDF document.
+
+Document
+
+This component represents the PDF document itself. It must be the root
+of your tree element structure, and under no circumstances should it be
+used as child of another react-pdf component. In addition, it should
+only have children of type <Page />.
+
+Valid props
+
+  -------------------------------------------------------------------------------------
+  Prop name                Description                               Type       Default
+  ------------ ------------------------------------ --------------------- -------------
+  title         Sets title info on the document’s                  String     undefined
+                             metadata                                     
+
+  author        Sets author info on the document’s                 String     undefined
+                             metadata                                     
+
+  subject      Sets subject info on the document’s                 String     undefined
+                             metadata                                     
+
+  keywords     Sets keywords associated info on the                String     undefined
+                       document’s metadata                                
+
+  creator      Sets creator info on the document’s                 String   “react-pdf”
+                             metadata                                     
+
+  producer     Sets producer info on the document’s                String   “react-pdf”
+                             metadata                                     
+
+  pdfVersion      Sets PDF version for generated                   String         “1.3”
+                             document                                     
+
+  language          Sets PDF default language                      String     undefined
+
+  pageMode      Specifying how the document should               PageMode       useNone
+                     be displayed when opened                             
+
+  pageLayout   This controls how (some) PDF viewers            PageLayout    singlePage
+                       choose to show pages                               
+
+  onRender       Callback after document renders.                Function     undefined
+                Receives document blob argument in                        
+                               web                                        
+  -------------------------------------------------------------------------------------
+
+PageMode type
+
+pageMode prop can take one of the following values. Take into account
+some viewers might ignore this setting.
+
+  ----------------------------------------------------------------------------
+  Value                                    Description
+  ---------------- -----------------------------------------------------------
+  useNone            Neither document bookmarks nor thumbnail images visible
+
+  useOutlines                      Document bookmarks visible
+
+  useThumbs                         Thumbnail images visible
+
+  fullScreen       Full-screen mode, with no menu bar, window controls, or any
+                                      other window visible
+
+  useOC                       Optional content group panel visible
+
+  useAttachments                    Attachments panel visible
+  ----------------------------------------------------------------------------
+
+PageLayout type
+
+pageLayout prop can take one of the following values. Take into account
+some viewers might ignore this setting.
+
+  ---------------------------------------------------------------------------
+  Value                                   Description
+  ---------------- ----------------------------------------------------------
+  singlePage                       Display one page at a time
+
+  oneColumn                     Display the pages in one column
+
+  twoColumnLeft    Display the pages in two columns, with odd numbered pages
+                                          on the left
+
+  twoColumnRight   Display the pages in two columns, with odd numbered pages
+                                          on the right
+
+  twoPageLeft       Display the pages two at a time, with odd-numbered pages
+                                          on the left
+
+  twoPageRight      Display the pages two at a time, with odd-numbered pages
+                                          on the right
+  ---------------------------------------------------------------------------
+
+------------------------------------------------------------------------
+
+Page
+
+Represents single page inside the PDF documents, or a subset of them if
+using the wrapping feature. A <Document /> can contain as many pages as
+you want, but ensures not rendering a page inside any component besides
+Document.
+
+Valid props
+
+  -------------------------------------------------------------------------------------------
+  Prop name                         Description                             Type      Default
+  ------------- ---------------------------------------------------- ----------- ------------
+  size            Defines page size. If String, must be one of the       String,         “A4”
+                available page sizes. Height is optional, if ommited      Array, 
+                             it will behave as “auto”.                   Number, 
+                                                                          Object 
+
+  orientation    Defines page orientation. Valid values: “portrait”       String   “portrait”
+                                   or “landscape”                                
+
+  wrap             Enables page wrapping for this page. See more         Boolean         true
+
+  style                    Defines page styles. See more                 Object,    undefined
+                                                                           Array 
+
+  debug          Enables debug mode on page bounding box. See more       Boolean        false
+
+  dpi             Enables setting a custom DPI for page contents.         Number           72
+
+  id                  Destination ID to be linked to. See more            String    undefined
+
+  bookmark              Attach bookmark to element. See more           String or    undefined
+                                                                        Bookmark 
+  -------------------------------------------------------------------------------------------
+
+------------------------------------------------------------------------
+
+View
+
+The most fundamental component for building a UI and is designed to be
+nested inside other views and can have 0 to many children.
+
+Valid props
+
+  -----------------------------------------------------------------------------------
+  Prop name               Description                                Type     Default
+  ---------- ------------------------------------- ---------------------- -----------
+  wrap         Enable/disable page wrapping for                   Boolean        true
+                       element. See more                                  
+
+  style          Defines view styles. See more              Object, Array   undefined
+
+  render        Render dynamic content based on                  Function   undefined
+                       context. See more                                  
+
+  debug       Enables debug mode on view bounding                 Boolean       false
+                         box. See more                                    
+
+  fixed         Render component in all wrapped                   Boolean       false
+                        pages. See more                                   
+
+  id          Destination ID to be linked to. See                  String   undefined
+                             more                                         
+
+  bookmark   Attach bookmark to element. See more      String or Bookmark   undefined
+  -----------------------------------------------------------------------------------
+
+------------------------------------------------------------------------
+
+Image
+
+A React component for displaying network or local (Node only) JPG or PNG
+images, as well as base64 encoded image strings.
+
+Valid props
+
+  -----------------------------------------------------------------------------------
+  Prop name              Description                                 Type     Default
+  ---------- ------------------------------------ ----------------------- -----------
+  src           Source of the image. See more               Source object   undefined
+
+  source            Alias of src. See more                  Source object   undefined
+
+  style         Defines view styles. See more               Object, Array   undefined
+
+  debug      Enables debug mode on view bounding                  Boolean       false
+                        box. See more                                     
+
+  fixed        Renders component in all wrapped                   Boolean       false
+                       pages. See more                                    
+
+  cache         Enables image caching between                     Boolean        true
+                     consecutive renders                                  
+
+  bookmark   Attach bookmark to element. See more      String or Bookmark   undefined
+  -----------------------------------------------------------------------------------
+
+Source object
+
+Defines the source of an image. Can be in any of these four valid forms:
+
+  -------------------------------------------------------------------------------------------------------------------------------------------
+  Form type                   Description                  Example
+  ---------- --------------------------------------------- ----------------------------------------------------------------------------------
+  String       Valid image URL or filesystem path (Node    www.react-pdf.org/test.jpg
+                                 only)                     
+
+  URL object  Enables to pass extra parameters on how to   { uri: valid-url, method: 'GET', headers: {}, body: '', credentials: 'include' }
+                             fetch images                  
+
+  Buffer       Renders image directly from Buffer. Image   Buffer
+             format (png or jpg) will be guessed based on  
+                                Buffer.                    
+
+  Data        Renders buffer image via the data key. It’s  { data: Buffer, format: 'png' \| 'jpg' }
+  buffer     also recommended to provide the image format  
+                so the engine knows how to proccess it     
+
+  Function    A function that returns (can also return a   () => String \| Promise<String>
+              promise that resolves to) any of the above   
+                                formats                    
+  -------------------------------------------------------------------------------------------------------------------------------------------
+
+------------------------------------------------------------------------
+
+Text
+
+A React component for displaying text. Text supports nesting of other
+Text or Link components to create inline styling.
+
+Valid props
+
+  -------------------------------------------------------------------------------------------
+  Prop name                         Description                              Type     Default
+  --------------------- ------------------------------------ -------------------- -----------
+  wrap                   Enables/disables page wrapping for               Boolean        true
+                                 element. See more                                
+
+  render                  Renders dynamic content based on               Function   undefined
+                                 context. See more                                
+
+  style                    Defines view styles. See more            Object, Array   undefined
+
+  debug                 Enables debug mode on view bounding               Boolean       false
+                                   box. See more                                  
+
+  fixed                   Renders component in all wrapped                Boolean       false
+                                  pages. See more                                 
+
+  hyphenationCallback    Specify hyphenation callback at a               Function   undefined
+                            text level. See hypthenation                          
+
+  id                    Destination ID to be linked to. See                String   undefined
+                                        more                                      
+
+  bookmark              Attach bookmark to element. See more   String or Bookmark   undefined
+  -------------------------------------------------------------------------------------------
+
+------------------------------------------------------------------------
+
+Link
+
+A React component for displaying an hyperlink. Link’s can be nested
+inside a Text component, or being inside any other valid primitive.
+
+Valid props
+
+  ------------------------------------------------------------------------------------
+  Prop name                Description                                Type     Default
+  ---------- ---------------------------------------- -------------------- -----------
+  src        Valid URL or destination ID. ID must be                String   undefined
+                    prefixed with #. See more                              
+
+  wrap           Enable/disable page wrapping for                  Boolean        true
+                        element. See more                                  
+
+  style           Defines view styles. See more              Object, Array   undefined
+
+  debug      Enables debug mode on view bounding box.              Boolean       false
+                             See more                                      
+
+  fixed       Render component in all wrapped pages.               Boolean       false
+                             See more                                      
+
+  bookmark     Attach bookmark to element. See more     String or Bookmark   undefined
+  ------------------------------------------------------------------------------------
+
+------------------------------------------------------------------------
+
+Note
+
+A React component for displaying a note annotation inside the document.
+
+Valid props
+
+  --------------------------------------------------------------------------------
+  Prop name                   Description                         Type     Default
+  ---------- --------------------------------------------- ----------- -----------
+  style              Defines view styles. See more             Object,   undefined
+                                                                 Array 
+
+  children                Note string content                   String   undefined
+
+  fixed       Renders component in all wrapped pages. See      Boolean       false
+                                 more                                  
+  --------------------------------------------------------------------------------
+
+------------------------------------------------------------------------
+
+Canvas
+
+A React component for freely drawing any content on the page.
+
+Valid props
+
+  -----------------------------------------------------------------------------------
+  Prop name              Description                                 Type     Default
+  ---------- ------------------------------------ ----------------------- -----------
+  style         Defines view styles. See more               Object, Array   undefined
+
+  paint                Painter function                          Function   undefined
+
+  debug      Enables debug mode on view bounding                  Boolean       false
+                        box. See more                                     
+
+  fixed        Renders component in all wrapped                   Boolean       false
+                       pages. See more                                    
+
+  bookmark   Attach bookmark to element. See more      String or Bookmark   undefined
+  -----------------------------------------------------------------------------------
+
+React-pdf does not check how much space your drawing takes, so make sure
+you always define a width and height on the style prop.
+
+Painter function
+
+Prop used to perform drawings inside the Canvas. It takes 3 arguments:
+
+- Painter object: Wrapper around pdfkit drawing methods. Use this to
+  draw inside the Canvas
+- availableWidth: Width of the Canvas element.
+- availableHeight: Height of the Canvas element.
+
+Painter object
+
+Wrapper around pdfkit methods you can use to draw inside the Canvas. All
+operations are chainable. For more information about how these methods
+work, please refer to pdfkit documentation.
+
+Available methods:
+
+- dash
+- clip
+- save
+- path
+- fill
+- font
+- text
+- rect
+- scale
+- moveTo
+- lineTo
+- stroke
+- rotate
+- circle
+- lineCap
+- opacity
+- ellipse
+- polygon
+- restore
+- lineJoin
+- fontSize
+- fillColor
+- lineWidth
+- translate
+- miterLimit
+- strokeColor
+- fillOpacity
+- roundedRect
+- strokeOpacity
+- bezierCurveTo
+- quadraticCurveTo
+- linearGradient
+- radialGradient
+
+------------------------------------------------------------------------
+
+PDFViewer Web only
+
+Iframe PDF viewer for client-side generated documents.
+
+Valid props
+
+  -------------------------------------------------------------------------------
+  Prop name                   Description                        Type     Default
+  ------------- --------------------------------------- ------------- -----------
+  style                  Defines iframe styles          Object, Array   undefined
+
+  className            Defines iframe class name               String   undefined
+
+  children            PDF document implementation            Document   undefined
+
+  width              Width of embedded PDF iframe             String,   undefined
+                                                               Number 
+
+  height             Height of embedded PDF iframe            String,   undefined
+                                                               Number 
+
+  showToolbar      Render the toolbar. Supported on           Boolean        true
+                        Chrome, Edge and Safari                       
+  -------------------------------------------------------------------------------
+
+Other props are passed through to the iframe.
+
+------------------------------------------------------------------------
+
+PDFDownloadLink Web only
+
+Anchor tag to enable generate and download PDF documents on the fly.
+Refer to on the fly rendering for more information.
+
+Valid props
+
+  -------------------------------------------------------------------------
+  Prop name           Description                          Type     Default
+  ----------- --------------------------- --------------------- -----------
+  document    PDF document implementation              Document   undefined
+
+  fileName      Download PDF file name                   String   undefined
+
+  style        Defines anchor tag styles          Object, Array   undefined
+
+  className    Defines anchor tag class                  String   undefined
+                         name                                   
+
+  children        Anchor tag content         DOM node, Function   undefined
+  -------------------------------------------------------------------------
+
+------------------------------------------------------------------------
+
+BlobProvider Web only
+
+Easy and declarative way of getting document’s blob data without showing
+it on screen. Refer to on the fly rendering for more information.
+
+Valid props
+
+  -------------------------------------------------------------------------------
+  Prop name                   Description                        Type     Default
+  ---------- --------------------------------------------- ---------- -----------
+  document            PDF document implementation            Document   undefined
+
+  children   Render prop with blob, url, error and loading   Function   undefined
+                          state as arguments                          
+  -------------------------------------------------------------------------------
+
+------------------------------------------------------------------------
+
+========== svg.md ==========
+import EditButton from ‘../src/components/Docs/EditButton’ import
+GoToExample from ‘../src/components/Docs/GoToExample’ import
+NavigationButtons from ‘../src/components/Docs/NavigationButtons’
+
+SVG Images
+
+Svg
+
+The <Svg /> element is a container that defines a new coordinate system
+and viewport. It is used as the outermost element of SVG documents.
+
+Valid props
+
+  ---------------------------------------------------------------------------------------------------
+  Prop name                                   Description                            Type     Default
+  --------------------- ------------------------------------------------------- --------- -----------
+  width                     The displayed width of the rectangular viewport       String,   undefined
+                                                                                   Number 
+
+  height                   The displayed height of the rectangular viewport       String,   undefined
+                                                                                   Number 
+
+  viewBox                  The SVG viewport coordinates for the current SVG        String   undefined
+                                               fragment                                   
+
+  preserveAspectRatio       How the svg fragment must be deformed if it is         String   undefined
+                           displayed with a different aspect ratio. See more              
+
+  style                              Defines SVG styles. See more                 Object,   undefined
+                                                                                    Array 
+  ---------------------------------------------------------------------------------------------------
+
+------------------------------------------------------------------------
+
+Line
+
+The <Line /> element is used to create a line.
+
+Valid props
+
+  ---------------------------------------------------------------------------
+  Prop                  Description                          Type     Default
+  name                                                            
+  ------ ------------------------------------------ ------------- -----------
+  x1     Defines the x-axis coordinate of the line        String,   undefined
+                      starting point.                      Number 
+
+  x2     Defines the x-axis coordinate of the line        String,   undefined
+                       ending point.                       Number 
+
+  y1     Defines the y-axis coordinate of the line        String,   undefined
+                      starting point.                      Number 
+
+  y2     Defines the y-axis coordinate of the line        String,   undefined
+                       ending point.                       Number 
+  ---------------------------------------------------------------------------
+
+See also Presentation Attributes
+
+------------------------------------------------------------------------
+
+Polyline
+
+The <Polyline /> element is used to create any shape that consists of
+only straight lines (that is connected at several points).
+
+Valid props
+
+  --------------------------------------------------------------------------------------
+  Prop                           Description                            Type     Default
+  name                                                                       
+  -------- -------------------------------------------------------- -------- -----------
+  points   This attribute defines the list of points (pairs of x,y    String   undefined
+             absolute coordinates) required to draw the polyline             
+
+  --------------------------------------------------------------------------------------
+
+See also Presentation Attributes
+
+------------------------------------------------------------------------
+
+Polygon
+
+The <Polygon /> element is used to create a graphic that contains at
+least three sides.
+
+Polygons are made of straight lines, and the shape is “closed” (all the
+lines connect up).
+
+Valid props
+
+  --------------------------------------------------------------------------------------
+  Prop                           Description                            Type     Default
+  name                                                                       
+  -------- -------------------------------------------------------- -------- -----------
+  points   This attribute defines the list of points (pairs of x,y    String   undefined
+              absolute coordinates) required to draw the polygon             
+
+  --------------------------------------------------------------------------------------
+
+See also Presentation Attributes
+
+------------------------------------------------------------------------
+
+Path
+
+The <Path /> element is the most powerful element in the SVG library of
+basic shapes. It can be used to create lines, curves, arcs, and more.
+
+Valid props
+
+  -------------------------------------------------------------------------------------
+  Prop                          Description                            Type     Default
+  name                                                                      
+  ------ --------------------------------------------------------- -------- -----------
+  d       This attribute defines the shape of the path. See more     String   undefined
+
+  -------------------------------------------------------------------------------------
+
+See also Presentation Attributes
+
+------------------------------------------------------------------------
+
+Rect
+
+The <Rect /> element is used to create a rectangle and variations of a
+rectangle shape.
+
+Valid props
+
+  --------------------------------------------------------------------------
+  Prop                 Description                          Type     Default
+  name                                                           
+  -------- ------------------------------------ ---------------- -----------
+  x           The x coordinate of the rect.       String, Number   undefined
+
+  y           The y coordinate of the rect.       String, Number   undefined
+
+  width           The width of the rect.          String, Number   undefined
+
+  height         The height of the rect.          String, Number   undefined
+
+  rx       The horizontal corner radius of the    String, Number   undefined
+                          rect.                                  
+
+  ry        The vertical corner radius of the     String, Number   undefined
+                          rect.                                  
+  --------------------------------------------------------------------------
+
+See also Presentation Attributes
+
+------------------------------------------------------------------------
+
+Circle
+
+The <Circle /> element is used to create a circle.
+
+Valid props
+
+  ---------------------------------------------------------------------------
+  Prop                  Description                          Type     Default
+  name                                                            
+  ------- ---------------------------------------- -------------- -----------
+  cx       The x-axis coordinate of the center of  String, Number   undefined
+                        the circle.                               
+
+  cy       The y-axis coordinate of the center of  String, Number   undefined
+                        the circle.                               
+
+  r              The radius of the circle.         String, Number   undefined
+  ---------------------------------------------------------------------------
+
+See also Presentation Attributes
+
+------------------------------------------------------------------------
+
+Ellipse
+
+The <Ellipse /> element is used to create an ellipse.
+
+An ellipse is closely related to a circle. The difference is that an
+ellipse has an x and a y radius that differs from each other, while a
+circle has equal x and y radius.
+
+Valid props
+
+  --------------------------------------------------------------------------
+  Prop                 Description                          Type     Default
+  name                                                           
+  -------- ------------------------------------ ---------------- -----------
+  cx          The x position of the ellipse.      String, Number   undefined
+
+  cy          The y position of the ellipse.      String, Number   undefined
+
+  rx        The radius of the ellipse on the x    String, Number   undefined
+                          axis.                                  
+
+  ry        The radius of the ellipse on the y    String, Number   undefined
+                          axis.                                  
+  --------------------------------------------------------------------------
+
+See also Presentation Attributes
+
+------------------------------------------------------------------------
+
+Text
+
+The <Text /> element draws a graphics element consisting of text.
+
+Valid props
+
+  ----------------------------------------------------------------------------
+  Prop                   Description                          Type     Default
+  name                                                             
+  ------ ------------------------------------------- ------------- -----------
+  x       The x coordinate of the starting point of        String,   undefined
+                     the text baseline.                     Number 
+
+  y       The y coordinate of the starting point of        String,   undefined
+                     the text baseline.                     Number 
+  ----------------------------------------------------------------------------
+
+See also Presentation Attributes
+
+------------------------------------------------------------------------
+
+Tspan
+
+The SVG <Tspan /> element defines a subtext within a <Text /> element or
+another <Tspan /> element. It allows for adjustment of the style and/or
+position of that subtext as needed.
+
+Valid props
+
+  ----------------------------------------------------------------------------
+  Prop                   Description                          Type     Default
+  name                                                             
+  ------ ------------------------------------------- ------------- -----------
+  x       The x coordinate of the starting point of        String,   undefined
+                     the text baseline.                     Number 
+
+  y       The y coordinate of the starting point of        String,   undefined
+                     the text baseline.                     Number 
+  ----------------------------------------------------------------------------
+
+See also Presentation Attributes
+
+------------------------------------------------------------------------
+
+G
+
+The <G /> SVG element is a container used to group other SVG elements.
+
+Transformations applied to the <G /> element are performed on its child
+elements, and its attributes are inherited by its children.
+
+Valid props
+
+This element only includes Presentation Attributes
+
+------------------------------------------------------------------------
+
+Stop
+
+The SVG <Stop /> element defines a color and its position to use on a
+gradient. This element is always a child of a <LinearGradient /> or
+<RadialGradient /> element
+
+Valid props
+
+  ------------------------------------------------------------------------------------
+  Prop name                      Description                          Type     Default
+  ------------- ---------------------------------------------- ----------- -----------
+  offset          Defines where the gradient stop is placed        String,   undefined
+                          along the gradient vector.                Number 
+
+  stopColor     Defines the color of the gradient stop. It can      String   undefined
+                          be used as a CSS property.                       
+
+  stopOpacity    Defines the opacity of the gradient stop. It      String,           1
+                        can be used as a CSS property.              Number 
+  ------------------------------------------------------------------------------------
+
+------------------------------------------------------------------------
+
+Defs
+
+The <Defs /> element is used to store graphical objects that will be
+used at a later time. Objects created inside a <Defs /> element are not
+rendered directly. To display them you have to reference them
+
+------------------------------------------------------------------------
+
+ClipPath
+
+The <ClipPath /> SVG element defines a clipping path, to be used by the
+clipPath property.
+
+A clipping path restricts the region to which paint can be applied.
+Conceptually, parts of the drawing that lie outside of the region
+bounded by the clipping path are not drawn.
+
+------------------------------------------------------------------------
+
+LinearGradient
+
+The <LinearGradient /> element lets authors define linear gradients that
+can be applied to fill or stroke of graphical elements.
+
+Valid props
+
+  ---------------------------------------------------------------------------------
+  Prop                       Description                           Type     Default
+  name                                                                  
+  ------ ---------------------------------------------------- --------- -----------
+  x1      Defines the x coordinate of the starting point of     String,   undefined
+         the vector gradient along which the linear gradient     Number 
+                              is drawn.                                 
+
+  x2     Defines the x coordinate of the ending point of the    String,   undefined
+          vector gradient along which the linear gradient is     Number 
+                                drawn.                                  
+
+  y1      Defines the y coordinate of the starting point of     String,   undefined
+         the vector gradient along which the linear gradient     Number 
+                              is drawn.                                 
+
+  y2     Defines the y coordinate of the ending point of the    String,   undefined
+          vector gradient along which the linear gradient is     Number 
+                                drawn.                                  
+  ---------------------------------------------------------------------------------
+
+------------------------------------------------------------------------
+
+RadialGradient
+
+The <RadialGradient /> element lets authors define radial gradients that
+can be applied to fill or stroke of graphical elements.
+
+Valid props
+
+  --------------------------------------------------------------------------------------
+  Prop                          Description                             Type     Default
+  name                                                                       
+  ------ --------------------------------------------------------- --------- -----------
+  cx     Defines the x coordinate of the end circle of the radial    String,   undefined
+                                 gradient.                            Number 
+
+  cy     Defines the y coordinate of the end circle of the radial    String,   undefined
+                                 gradient.                            Number 
+
+  fr       Defines the radius of the start circle of the radial      String,   undefined
+           gradient. The gradient will be drawn such that the 0%      Number 
+          <Stop> is mapped to the perimeter of the start circle.             
+
+  fx        Defines the x coordinate of the start circle of the      String,   undefined
+                             radial gradient.                         Number 
+
+  fy        Defines the y coordinate of the start circle of the      String,   undefined
+                             radial gradient.                         Number 
+  --------------------------------------------------------------------------------------
+
+------------------------------------------------------------------------
+
+Presentation Attributes
+
+SVG presentation attributes are CSS properties that can be used as
+attributes on SVG elements. This means it can be passed either inside a
+style object or directly by element’s props.
+
+Supported attributes
+
+  -----------------------------------------------------------------------------------------
+  Prop name                            Description                         Type     Default
+  ------------------ ------------------------------------------------ --------- -----------
+  color              Provides a potential indirect value for the fill    String   undefined
+                                  or stroke attributes.                         
+
+  dominantBaseline     Defines the baseline used to align the box’s      String        auto
+                             text and inline-level contents.                    
+
+  fill                  It defines the color of the inside of the        String   undefined
+                             graphical element it applies to.                   
+
+  fillOpacity          It specifies the opacity of the color or the     String,           1
+                        content the current object is filled with.       Number 
+
+  fillRule             It indicates how to determine what side of a      String     nonzero
+                                 path is inside a shape.                        
+
+  opacity            It specifies the transparency of an object or a    String,           1
+                                    group of objects.                    Number 
+
+  stroke              Defines the color used to paint the outline of     String   undefined
+                                        the shape.                              
+
+  strokeWidth        Defines the width of the stroke to be applied to   String,           1
+                                        the shape.                       Number 
+
+  strokeOpacity       Defines the opacity of the stroke of a shape.     String,           1
+                                                                         Number 
+
+  strokeLinecap      Defines the shape to be used at the end of open     String        butt
+                             subpaths when they are stroked.                    
+
+  strokeLinejoin      Defines the shape to be used at the corners of     String       miter
+                               paths when they are stroked.                     
+
+  strokeDasharray     Defines the pattern of dashes and gaps used to     String   undefined
+                             paint the outline of the shape.                    
+
+  transform          Defines a list of transform definitions that are    String   undefined
+                         applied to an element and the element’s                
+                                        children.                               
+
+  textAnchor         Defines the horizontal alignment of a string of     String   undefined
+                                          text.                                 
+
+  visibility           Lets you control the visibility of graphical      String     visible
+                                        elements.                               
+  -----------------------------------------------------------------------------------------
+
+========== hooks.md ==========
+import EditButton from ‘../src/components/Docs/EditButton’ import
+NavigationButtons from ‘../src/components/Docs/NavigationButtons’
+
+Hooks
+
+usePDF Web only
+
+React-pdf now ships a hook called usePDF that enables accessing all PDF
+creation capabilities via a React hook API. This is great if you need
+more control over how the document gets rendered or how often it’s
+updated.
+
+Usage
+
+    const [instance, update] = usePDF({ document });
+
+Parameters
+
+  Prop name          Description        Default
+  ----------- ------------------------- -----------
+  document     Document’s root element  undefined
+
+Instance object
+
+  ---------------------------------------------------------------------------
+  Prop name                      Description                      Default
+  --------- ----------------------------------------------------- -----------
+  url          Rendered document blog url. Null if loading or     undefined
+                                   errored                        
+
+  blob       Rendered document blob instance. Null if loading or  undefined
+                                   errored                        
+
+  loading     Loading state. It’s true if current render is in    false
+                                    place                         
+
+  error               Error message if rendering failed           undefined
+  ---------------------------------------------------------------------------
+
+Update function
+
+Used to trigger a document re-render. By default, changing the document
+instance does not triggers a new PDF file creation. This is especially
+helpful when rendering a download button or something similar, where you
+might want to render the document right before the action gets
+triggered.
+
+The update function takes the new document and does not return anything.
+
+  For more information about how this hook is used please refer to the
+  Using the usePDF hook section
+
+------------------------------------------------------------------------
+
+========== styling.md ==========
+import List from ‘../src/components/UI/List’ import EditButton from
+‘../src/components/Docs/EditButton’ import GoToExample from
+‘../src/components/Docs/GoToExample’ import NavigationButtons from
+‘../src/components/Docs/NavigationButtons’
+
+Styling
+
+Because a document without styles would be very boring, react-pdf ships
+a powerful styling solution using CSS and Flexbox.
+
+StyleSheet API
+
+React-pdf also sticks with the primitives specs when it comes to
+styling.
+
+StyleSheet.create()
+
+Create a stylesheet. This method expects a valid JS object as only
+argument (containing as much css definitions as you want) and returns an
+object that you can pass down to components via the style prop
+
+    import React from 'react';
+    import { Page, Text, View, Document, StyleSheet } from '@react-pdf/renderer';
+
+    const styles = StyleSheet.create({
+      page: { backgroundColor: 'tomato' },
+      section: { color: 'white', textAlign: 'center', margin: 30 }
+    });
+
+    const doc = (
+      <Document>
+        <Page size="A4" style={styles.page}>
+          <View style={styles.section}>
+            <Text>Section #1</Text>
+          </View>
+        </Page>
+      </Document>
+    );
+
+    ReactPDF.render(doc);
+
+Inline styling
+
+There’s no need to call StyleSheet.create in order to style components.
+You can also just pass a plain JS object to the style prop and react-pdf
+will get the job done.
+
+    import React from 'react';
+    import { Page, Text, View, Document } from '@react-pdf/renderer';
+
+    const MyDocument = () => (
+      <Document>
+        <Page size="A4" style={{ backgroundColor: 'tomato' }}>
+          <View style={{ color: 'white', textAlign: 'center', margin: 30 }}>
+            <Text>Section #1</Text>
+          </View>
+        </Page>
+      </Document>
+    );
+
+Mixing both solutions
+
+The style prop also accepts an Array as value, containing any possible
+combination of the last two alternatives
+
+    import React from 'react';
+    import { Page, Text, View, Document, StyleSheet } from '@react-pdf/renderer';
+
+    const styles = StyleSheet.create({
+      page: { backgroundColor: 'tomato' },
+      section: { textAlign: 'center', margin: 30 }
+    });
+
+    const MyDocument = () => (
+      <Document>
+        <Page size="A4" style={styles.page}>
+          <View style={[styles.section, { color: 'white' }]}>
+            <Text>Section #1</Text>
+          </View>
+        </Page>
+      </Document>
+    );
+
+  Protip: This can be useful when you want to apply both predefined
+  styles, and styles based on props
+
+------------------------------------------------------------------------
+
+Media queries
+
+There may be times in which you’ll need to apply different styles based
+on the document context. For that, we provide media-queries support
+(just as you would do it for the web!). You can query based on both
+width and height (min and max), and also orientation:
+
+    import React from 'react';
+    import { Page, Text, View, Document, StyleSheet } from '@react-pdf/renderer';
+
+    const styles = StyleSheet.create({
+      section: {
+        width: 200,
+        '@media max-width: 400': {
+          width: 300,
+        },
+        '@media orientation: landscape': {
+          width: 400,
+        },
+      }
+    });
+
+    const MyDocument = () => (
+      <Document>
+        <Page size="A4" style={styles.page}>
+          <View style={styles.section}>
+            <Text>Section #1</Text>
+          </View>
+        </Page>
+      </Document>
+    );
+
+------------------------------------------------------------------------
+
+Valid units
+
+pt (default. Based on the standard 72 dpi PDF document)
+
+in inches
+
+mm millimeters
+
+cm centimeters
+
+% percentage
+
+vw viewport/page width
+
+vh viewport/page height
+
+------------------------------------------------------------------------
+
+Valid CSS properties
+
+Flexbox
+
+- alignContent
+- alignItems
+- alignSelf
+- flex
+- flexDirection
+- flexWrap
+- flexFlow
+- flexGrow
+- flexShrink
+- flexBasis
+- justifyContent
+- gap
+- rowGap
+- columnGap
+
+Layout
+
+- bottom
+- display
+- left
+- position
+- right
+- top
+- overflow
+- zIndex
+
+Dimension
+
+- height
+- maxHeight
+- maxWidth
+- minHeight
+- minWidth
+- width
+
+Color
+
+- backgroundColor
+- color
+- opacity
+
+Text
+
+- fontSize
+- fontFamily
+- fontStyle
+- fontWeight
+- letterSpacing
+- lineHeight
+- maxLines
+- textAlign
+- textDecoration
+- textDecorationColor
+- textDecorationStyle
+- textIndent
+- textOverflow
+- textTransform
+
+Sizing/positioning
+
+- object-fit
+- object-position
+
+Margin/padding
+
+- margin
+- marginHorizontal
+- marginVertical
+- marginTop
+- marginRight
+- marginBottom
+- marginLeft
+- padding
+- paddingHorizontal
+- paddingVertical
+- paddingTop
+- paddingRight
+- paddingBottom
+- paddingLeft
+
+Transformations
+
+- transform:rotate
+- transform:scale
+- transform:scaleX
+- transform:scaleY
+- transform:translate
+- transform:translateX
+- transform:translateY
+- transform:skew
+- transform:skewX
+- transform:skewY
+- transform:matrix
+- transformOrigin
+
+Borders
+
+- border
+- borderColor
+- borderStyle
+- borderWidth
+- borderTop
+- borderTopColor
+- borderTopStyle
+- borderTopWidth
+- borderRight
+- borderRightColor
+- borderRightStyle
+- borderRightWidth
+- borderBottom
+- borderBottomColor
+- borderBottomStyle
+- borderBottomWidth
+- borderLeft
+- borderLeftColor
+- borderLeftStyle
+- borderLeftWidth
+- borderTopLeftRadius
+- borderTopRightRadius
+- borderBottomRightRadius
+- borderBottomLeftRadius
+
+========== fonts.md ==========
+import EditButton from ‘../src/components/Docs/EditButton’ import
+GoToExample from ‘../src/components/Docs/GoToExample’ import
+NavigationButtons from ‘../src/components/Docs/NavigationButtons’
+
+Fonts
+
+React-pdf is shipped with a Font module that enables to load fonts from
+different sources, handle how words are wrapped and defined an emoji
+source to embed these glyphs on your document.
+
+You can define multiple sources for the same font family, each with a
+different fontStyle or fontWeight. React-pdf will pick the appropriate
+font for each <Text /> based on its style and the registered fonts.
+
+Currently, - only TTF and WOFF fonts files are supported. A list of
+available TTF fonts from Google can be found here. - Any OpenType
+Variable fonts (such as Noto Sans variable weights font) does not work
+properly because PDF 2.0 spec does not support those. It is required to
+register separate fonts using ‘fonts’ property (explained in below).
+
+    import { StyleSheet, Font } from '@react-pdf/renderer'
+
+    // Register font
+    Font.register({ family: 'Roboto', src: source });
+
+    // Reference font
+    const styles = StyleSheet.create({
+      title: {
+        fontFamily: 'Roboto'
+      }
+    })
+
+------------------------------------------------------------------------
+
+register
+
+Fonts really make the difference when it comes on styling a document.
+For obvious reasons, react-pdf cannot ship a wide amount of them. Here’s
+a list of available font families that are supported out of the box:
+
+- Courier
+- Courier-Bold
+- Courier-Oblique
+- Courier-BoldOblique
+- Helvetica
+- Helvetica-Bold
+- Helvetica-Oblique
+- Helvetica-BoldOblique
+- Times-Roman
+- Times-Bold
+- Times-Italic
+- Times-BoldItalic
+
+In case you want to use a different font, you may load additional font
+files from many different sources via the register method very easily.
+
+    import { Font } from '@react-pdf/renderer'
+
+    Font.register({ family: 'FamilyName', src: source, fontStyle: 'normal', fontWeight: 'normal', fonts?: [] });
+
+source
+
+Specifies the source of the font. This can either be a valid URL, or an
+absolute path if you’re using react-pdf on Node.
+
+family
+
+Name to which the font will be referenced on styles definition. Can be
+any unique valid string
+
+fontStyle
+
+Specifies to which font style the registered font refers to.
+
+  -----------------------------------------------------------------------------
+  Value     Description
+  --------- -------------------------------------------------------------------
+  normal    Selects a font that is classified as normal Default
+
+  italic    Selects a font that is classified as italic. If no italic version
+            of the font is registered, react-pdf will fail when a style of this
+            type is present
+
+  oblique   Selects a font that is classified as oblique. If no oblique version
+            of the font is registered, react-pdf will fail when a style of this
+            type is present
+  -----------------------------------------------------------------------------
+
+fontWeight
+
+Specifies the registered font weight.
+
+  Value        Description
+  ------------ --------------------------------------
+  thin         Equals to value 100
+  ultralight   Equals to value 200
+  light        Equals to value 300
+  normal       Equals to value 400 Default
+  medium       Equals to value 500
+  semibold     Equals to value 600
+  bold         Equals to value 700
+  ultrabold    Equals to value 800
+  heavy        Equals to value 900
+  number       Any integer value between 0 and 1000
+
+When the exact font weight is not registered for a given text, react-pdf
+will fallback to the nearest registered weight in the same way browsers
+do. More information here
+
+fonts
+
+In many cases you will end up registering multiple sources for the same
+font family (each with different font-style and font-weight for
+instance). As an alternative of calling Font.register for each of this,
+you can use the fonts attribute to register them all at once:
+
+    Font.register({ family: 'Roboto', fonts: [
+     { src: source1 }, // font-style: normal, font-weight: normal
+     { src: source2, fontStyle: 'italic' },
+     { src: source3, fontStyle: 'italic', fontWeight: 700 },
+    ]});
+
+------------------------------------------------------------------------
+
+registerHyphenationCallback
+
+Enables you to have fine-grained control over how words break, passing
+your own callback and handle all that logic for yourself:
+
+    import { Font } from '@react-pdf/renderer'
+
+    const hyphenationCallback = (word) => {
+      // Return word parts in an array
+    }
+
+    Font.registerHyphenationCallback(hyphenationCallback);
+
+Disabling hyphenation
+
+You can easily disable word hyphenation by just returning the same word
+as it is passed to the hyphenation callback
+
+    Font.registerHyphenationCallback(word => [word]);
+
+------------------------------------------------------------------------
+
+registerEmojiSource
+
+PDF documents do not support color emoji fonts. This is a bummer for the
+ones out there who love their expressiveness and simplicity. The only
+way of rendering this glyphs on a PDF document, is by embedding them as
+images.
+
+React-pdf makes this task simple by enabling you to use a CDN from where
+to download emoji images. All you have to do is setup a valid URL (we
+recommend using Twemoji for this task), and react-pdf will take care of
+the rest:
+
+    import { Font } from '@react-pdf/renderer'
+
+    Font.registerEmojiSource({
+      format: 'png',
+      url: 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/',
+    });
+
+  Protip: react-pdf will need a internet connection to download emoji’s
+  images at render time, so bare that in mind when choosing to use this
+  API
+
+========== node.md ==========
+import EditButton from ‘../src/components/Docs/EditButton’ import
+NavigationButtons from ‘../src/components/Docs/NavigationButtons’
+
+Node API
+
+renderToFile
+
+Helper function to render a PDF into a file.
+
+Usage
+
+    const MyDocument = () => (
+      <Document>
+        <Page>
+          <Text>React-pdf</Text>
+        </Page>
+      </Document>
+    );
+
+    await renderToFile(<MyDocument />, `${__dirname}/my-doc.pdf`);
+
+Arguments
+
+  --------------------------------------------------------------------------
+  Prop name                      Description                     Default
+  ---------- --------------------------------------------------- -----------
+  document         Document’s root element to be rendered        undefined
+
+  path       File system path where the document will be created undefined
+
+  callback    Function to be called after rendering is finished  undefined
+  --------------------------------------------------------------------------
+
+renderToString
+
+Helper function to render a PDF into a string.
+
+Usage
+
+    const MyDocument = () => (
+      <Document>
+        <Page>
+          <Text>React-pdf</Text>
+        </Page>
+      </Document>
+    );
+
+    const value = await renderToString(<MyDocument />);
+
+Arguments
+
+  Prop name                 Description                Default
+  ----------- ---------------------------------------- -----------
+  document     Document’s root element to be rendered  undefined
+
+Returns
+
+String representation of PDF document
+
+renderToStream
+
+Helper function to render a PDF into a Node Stream.
+
+Usage
+
+    const MyDocument = () => (
+      <Document>
+        <Page>
+          <Text>React-pdf</Text>
+        </Page>
+      </Document>
+    );
+
+    const stream = await renderToStream(<MyDocument />);
+
+Arguments
+
+  Prop name                 Description                Default
+  ----------- ---------------------------------------- -----------
+  document     Document’s root element to be rendered  undefined
+
+Returns
+
+PDF document Stream
+
+========== page-wrapping.md ==========
+import GoToExample from ‘../src/components/Docs/GoToExample’
+
+Page wrapping
+
+Semantically, the <Page /> component represents a single page in the
+rendered document. However, there are scenarios in which you would
+expect to have page breaks whenever the page contents exceed their
+limits, specially when handling big chunks of text. After all, PDFs are
+paged documents. React-pdf has a built-in wrapping engine that is
+enabled by default, so you can start creating paged documents right out
+of the box. If that’s not what you need, you can disable this very
+easily by doing:
+
+    import { Document, Page } from '@react-pdf/renderer'
+
+    const doc = () => (
+      <Document>
+        <Page wrap={false}>
+          // something pretty here
+        </Page>
+      </Document>
+    );
+
+Breakable vs. unbreakable components
+
+We can identify two different types of components based on how they
+wrap:
+
+- Breakable components try to fill up the remaining space before jumping
+  into a new page. By default, this group is composed by View, Text and
+  Link components
+- Unbreakable components are indivisible, therefore if there isn’t
+  enough space for them they just get rendered in the following page. In
+  this group by default we only find Image.
+
+Disabling component wrapping
+
+React-pdf also enables you to transform breakable elements into their
+opposite, forcing them to always render in a new page. This can be done
+by simply setting the prop wrap={false} to any valid component:
+
+    import { Document, Page, View } from '@react-pdf/renderer'
+
+    const doc = () => (
+      <Document>
+        <Page wrap>
+          <View wrap={false}>
+            // fancy things here
+          </View>
+        </Page>
+      </Document>
+    );
+
+Now, if the <View /> component happens to be at the bottom of the page
+without enough space, it will be rendered in a new page as it would be
+unbreakable.
+
+Page breaks
+
+Page breaks are useful for separating concerns inside the document, or
+ensuring that a certain element will always show up on the top of the
+page.
+
+Adding page breaks in react-pdf is very simple: all you have to do is
+add the break prop to any primitive. This will force the wrapping
+algorithm to start a new page when rendering that element.
+
+    import { Document, Page, Text } from '@react-pdf/renderer'
+
+    const doc = () => (
+      <Document>
+        <Page wrap>
+          <Text break>
+            // fancy things here
+          </Text>
+        </Page>
+      </Document>
+    );
+
+Fixed components
+
+There is still another scenario we didn’t talk about yet: what if you
+want to wrap pages but also be able to render a component on all pages?
+This is where the fixed prop comes into play.
+
+    import { Document, Page, View } from '@react-pdf/renderer'
+
+    const doc = () => (
+      <Document>
+        <Page wrap>
+          <View fixed>
+            // fancy things here
+          </View>
+        </Page>
+      </Document>
+    );
+
+Just by that, the <View /> component will be placed repeatedly
+throughout all pages.
+
+  Protip: This feature can be very handy for creating nice headers,
+  footers or page numbers, among other use cases. You can even
+  absolutely position fixed elements on your page to create more complex
+  layouts!
+
+------------------------------------------------------------------------
+
+========== document-navigation.md ==========
+Document Navigation
+
+There are two main ways to make a document navigable:
+
+Destinations v2.0.0
+
+Destinations are the simplest form of navigation. They allow to create
+interactive links that take the user directly to the defined place
+within the document.
+
+A destination can be created by setting the id prop to a String on any
+supported element (see more). After that, the destination can be linked
+to by setting the src prop on the <Link /> element to the same String,
+but with the leading hash (#) symbol:
+
+    import { Document, Link, Page, Text } from '@react-pdf/renderer'
+
+    const doc = () => (
+      <Document>
+        <Page>
+          <Link src='#Footnote'> // Notice the hash symbol
+            Click me to get to the footnote
+          </Link>
+
+          // Other content here
+
+          <Text id='Footnote'> // No hash symbol
+            You are here because you clicked the link above
+          </Text>
+        </Page>
+      </Document>
+    );
+
+Bookmarks v2.2.0
+
+Bookmarks allow the user to navigate interactively from one part of the
+document to another. They form a tree-structured hierarchy of items,
+which serve as a visual table of contents to display the document’s
+structure to the user.
+
+A bookmark can be defined by the bookmark prop on any of the supported
+components (see more), and can take the form of either a String or a
+Bookmark type
+
+    import { Document, Page, Text } from '@react-pdf/renderer'
+
+    const doc = () => (
+      <Document>
+        <Page bookmark="Harry Potter and the Philosopher's Stone">
+         <Text bookmark={{ title: "Chapter 1: The Boy Who Lived", fit: true }}>{...}</Text>
+        </Page>
+      </Document>
+    );
+
+The example above will create a table of content of 2 nested items: The
+parent will be the book’s name, and the child the chapter’s name. You
+can nest as many bookmarks as you want.
+
+Note that some older PDF viewers may not support bookmarks.
+
+Bookmark type
+
+Object that matches the following schema:
+
+  --------------------------------------------------------------------------
+  Value                            Description                          Type
+  ------------- -------------------------------------------------- ---------
+  title                           Bookmark value                      String
+
+  top           Y coodinate from the document top edge where user     Number
+  (Optional)             get’s redirected. Defaults to 0           
+
+  left          X coodinate from the document top edge where user     Number
+  (Optional)             get’s redirected. Defaults to 0           
+
+  zoom           Reader zoom value after clicking on the bookmark     Number
+  (Optional)                                                       
+
+  fit                 Redirect user to the start of the page         Boolean
+  (Optional)                                                       
+
+  expanded          Viewer should expand tree node in table of       Boolean
+  (Optional)         contents (not supported in some viewers)      
+  --------------------------------------------------------------------------
+
+------------------------------------------------------------------------
+
+========== on-the-fly.md ==========
+On the fly rendering Web only
+
+There are some cases in which you may need to generate a document
+without showing it on screen. For those scenarios, react-pdf provides
+three different solutions:
+
+Download link
+
+Is it possible that what you need is just a “Download” button. If that’s
+the case, you can use <PDFDownloadLink /> to easily create and download
+your document.
+
+    import { PDFDownloadLink, Document, Page } from '@react-pdf/renderer';
+
+    const MyDoc = () => (
+      <Document>
+        <Page>
+          // My document data
+        </Page>
+      </Document>
+    );
+
+    const App = () => (
+      <div>
+        <PDFDownloadLink document={<MyDoc />} fileName="somename.pdf">
+          {({ blob, url, loading, error }) =>
+            loading ? 'Loading document...' : 'Download now!'
+          }
+        </PDFDownloadLink>
+      </div>
+    );
+
+  Protip: You still have access to blob’s data if you need it.
+
+Access blob data
+
+However, react-pdf does not stick to just download the document but also
+enables direct access to the document’s blob data for any other possible
+use case. All you have to do is make use of <BlobProvider />.
+
+    import { BlobProvider, Document, Page } from '@react-pdf/renderer';
+
+    const MyDoc = (
+      <Document>
+        <Page>
+          // My document data
+        </Page>
+      </Document>
+    );
+
+    const App = () => (
+      <div>
+        <BlobProvider document={MyDoc}>
+          {({ blob, url, loading, error }) => {
+            // Do whatever you need with blob here
+            return <div>There's something going on on the fly</div>;
+          }}
+        </BlobProvider>
+      </div>
+    );
+
+You can also obtain the blob data imperatively, which may be useful if
+you are using react-pdf on a non-React frontend (web only).
+
+    import { pdf, Document, Page } from '@react-pdf/renderer';
+
+    const MyDoc = (
+      <Document>
+        <Page>
+          // My document data
+        </Page>
+      </Document>
+    );
+
+    const blob = pdf(MyDoc).toBlob();
+
+Using the usePDF hook
+
+React-pdf now ships a hook API that will give you direct access to the
+document data (such as blob or url state) as well as with an update
+function to trigger document re-rendering. Since document re-computation
+can be an expensive operation, this hook is perfect solution for those
+cases in where you need a fine control over when this happens.
+
+    import { usePDF, Document, Page } from '@react-pdf/renderer';
+
+    const MyDoc = (
+      <Document>
+        <Page>
+          // My document data
+        </Page>
+      </Document>
+    );
+
+    const App = () => {
+      const [instance, updateInstance] = usePDF({ document: MyDoc });
+
+      if (instance.loading) return <div>Loading ...</div>;
+
+      if (instance.error) return <div>Something went wrong: {instance.error}</div>;
+
+      return (
+        <a href={instance.url} download="test.pdf">
+          Download
+        </a>
+      );
+    }
+
+  Protip: You still have access to blob’s data inside instance.blob if
+  you need it
+
+------------------------------------------------------------------------
+
+========== orphan-widow-protection.md ==========
+import GoToExample from ‘../src/components/Docs/GoToExample’
+
+Orphan & widow protection
+
+When you layout text, orphans and widows can make the difference between
+a good document and a great one. That’s why react-pdf has a built-in
+orphan and widow protection that you can use right out of the box.
+
+But react-pdf does not reserve this protection just for text. You can
+adjust this protection to your convenience by just setting some props to
+any react-pdf primitive:
+
+  --------------------------------------------------------------------------------------------
+  Prop name                               Description                           Type   Default
+  ------------------ ----------------------------------------------------- --------- ---------
+  minPresenceAhead    Hint that no page wrapping should occur between all    Integer         0
+                        sibling elements following the element within n              
+                                            points                                   
+
+  orphans (text         Specifies the minimum number of lines in a text      Integer         2
+  only)              element that must be shown at the bottom of a page or           
+                                        its container.                               
+
+  widows (text only)    Specifies the minimum number of lines in a text      Integer         2
+                      element that must be shown at the top of a page or             
+                                        its container.                               
+  --------------------------------------------------------------------------------------------
+
+  Protip: You can use this API to ensure that headings do not get
+  rendered at the bottom of a page
+
+------------------------------------------------------------------------
+
+========== dynamic-content.md ==========
+import GoToExample from ‘../src/components/Docs/GoToExample’
+
+Dynamic content
+
+With react-pdf, now it is possible to render dynamic text based on the
+context in which a certain element is being rendered. All you have to do
+is to pass a function to the render prop of the <Text /> or <View />
+component. The result will be rendered inside the text block as a child.
+
+    import { Document, Page } from '@react-pdf/renderer'
+
+    const doc = () => (
+      <Document>
+        <Page wrap>
+          <Text render={({ pageNumber, totalPages }) => (
+            `${pageNumber} / ${totalPages}`
+          )} fixed />
+
+          <View render={({ pageNumber }) => (
+            pageNumber % 2 === 0 && (
+              <View style={{ background: 'red' }}>
+                <Text>I'm only visible in odd pages!</Text>
+              </View>
+            )
+          )} />
+        </Page>
+      </Document>
+    );
+
+Available arguments
+
+  -------------------------------------------------------------------------
+  Name                                 Description                     Type
+  --------------------- ----------------------------------------- ---------
+  pageNumber                       Current page number              Integer
+
+  totalPages Text only     Total amount of pages in the final       Integer
+                                        document                  
+
+  subPageNumber           Current subpage in the Page component     Integer
+
+  subPageTotalPages         Total amount of pages in the Page       Integer
+  Text only                             component                 
+  -------------------------------------------------------------------------
+
+Bear in mind that the render function is called twice for <Text />
+elements: once for layout on the page wrapping process, and another one
+after it’s know how many pages the document will have.
+
+  Protip: Use this API in conjunction with fixed elements to render page
+  number indicators
+
+------------------------------------------------------------------------
+
+========== debugging.md ==========
+import DebugSample from ‘../src/components/Docs/DebugSample’ import
+GoToExample from ‘../src/components/Docs/GoToExample’
+
+Debugging
+
+React-pdf ships a built-in debugging system you can use whenever you
+have doubts about how elements are being laid out on the page. All you
+have to do is to set the debug prop to true on any valid primitive
+(except Document) and re-render the document to see the result on the
+screen.
+
+------------------------------------------------------------------------
+
+========== hyphenation.md ==========
+import GoToExample from ‘../src/components/Docs/GoToExample’
+
+Hyphenation
+
+Hyphenation refers to the automated process of breaking words between
+lines to create a better visual consistency across a text block. This is
+a complex problem. It involves knowing about the language of the text,
+available space, ligatures, among other things.
+
+React-pdf internally implements the Knuth and Plass line breaking
+algorithm that produces the minimum amount of lines without compromising
+text legibility. By default it’s setup to hyphenate english words.
+
+If you need more fine-grained control over how words break, you can pass
+your own callback and handle all that logic by yourself:
+
+    import { Font } from '@react-pdf/renderer'
+
+    const hyphenationCallback = (word) => {
+      // Return word syllables in an array
+    }
+
+    Font.registerHyphenationCallback(hyphenationCallback);
+
+You can use the default hyphenation callback as a starting point.
+
+Example of a custom implementation (German):
+
+    import { Font } from "@react-pdf/renderer";
+    import { hyphenateSync as hyphenateDE } from "hyphen/de";
+
+    const hyphenationCallback = (word) => {
+      return hyphenateDE(word).split("\u00AD");
+    };
+
+    Font.registerHyphenationCallback(hyphenationCallback);
+
+  Protip: If you don’t want to hyphenate words at all, just provide a
+  callback that returns the same words it receives. More information
+  here
+
+========== express.md ==========
+Usage with Express.js node only
+
+    import React from 'react';
+    import ReactPDF from '@react-pdf/renderer';
+
+    const pdfStream = await ReactPDF.renderToStream(<MyDocument />);
+    res.setHeader('Content-Type', 'application/pdf');
+    pdfStream.pipe(res);
+    pdfStream.on('end', () => console.log('Done streaming, response sent.'));
+
+========== web-workers.md ==========
+Rendering large documents in the browser
+
+If you need to render documents with 30 pages or more in the browser,
+using react-pdf directly in React can occupy the browser’s main thread
+for a long time. This can lead to unresponsive UI and browsers offering
+the user to abort the script. To avoid this, you should render large
+documents inside a web worker. Web workers are executed in separate
+threads, and therefore do not block the main thread of the browser. This
+way, the UI can stay responsive while the PDF is being rendered. For an
+example on how to run react-pdf in a web worker, see this blog post.
+
+========== advanced.md ==========
+import EditButton from ‘../src/components/Docs/EditButton’ import
+NavigationButtons from ‘../src/components/Docs/NavigationButtons’
+
+import PageWrapping from ‘./page-wrapping.md’ import DocumentNavigation
+from ‘./document-navigation.md’ import OnTheFly from ‘./on-the-fly.md’
+import OrphanWidowProtection from ‘./orphan-widow-protection.md’ import
+DynamicContent from ‘./dynamic-content.md’ import Hyphenation from
+‘./hyphenation.md’ import Debugging from ‘./debugging.md’ import Express
+from ‘./express.md’ import WebWorkers from ‘./web-workers.md’
+
+Advanced
+
+
+
+=== START blog post about web-workers ===
+
+
+Creating PDF Files Without Slowing Down Your App
+
+In many web applications, there are times when we need to generate and download PDF files on the client-side. However, for the sake of showing a live preview to users, PDF generation may block the main thread and cause poor user experience. This is where web workers come into play. In this article, we will explore how to use @react-pdf/renderer inside a web worker to render PDF files in a non-blocking way.
+
+What is react-pdf?
+@react-pdf/renderer is an open-source library that enables developers to create and render PDF documents using React components, which allows developers to use a familiar declarative syntax. @react-pdf/renderer provides a set of built-in components for creating basic PDF elements such as text, images and links. It’s engine-agnostic and can run both inside the browser and NodeJS.
+
+What are Web Workers?
+A web worker is a JavaScript process that runs separate from the main thread. It allows us to perform long-running tasks without in a non blocking fashion. This can improve the overall performance and user experience of an application. Web workers can communicate between each other and the main thread via messages. A Web worker should primarily be used for long-running tasks, as managing them and sending data has a performance overhead.
+
+
+How it all comes together?
+Before we get into the details of using web workers, let’s start by creating a simple react pdf component. 
+Here’s an example:
+
+import { Page, Document, Text } from '@react-pdf/renderer';
+
+export type PDFProps = {
+  title: string;
+  author: string;
+  description: string;
+};
+
+export const PDF = (props: PDFProps) => (
+  <Document title={props.title} author={props.author} subject={props.description}>
+    <Page>
+      <Text>Hello, World!</Text>
+    </Page>
+  </Document>
+);
+This component creates a PDF document with a single page that says, “Hello, World!”.
+
+
+Creating a RenderPDF Function
+Now that we have a PDF component, we need a way to convert it to a PDF file. We can do this using the toBlob method of the pdf function provided by @react-pdf/renderer. Here’s an example of a function that does this:
+
+import { createElement } from 'react';
+import type { PDFProps } from './PDF';
+
+export const renderPDF = async (props: PDFProps) => {
+  const { pdf } = await import('@react-pdf/renderer');
+  const { PDF } = await import('./PDF');
+  return pdf(createElement(PDF, props)).toBlob();
+};
+This function takes a PDFProps object as an argument, creates a PDF element using React.createElement, and then passes it to the pdf function provided by @react-pdf/renderer. Finally, it returns a Blob object representing the PDF file.
+
+Creating a Web Worker
+Now that we have a way to create PDF files, we can create a web worker to run the renderPDF function in a separate thread. Here’s an example of a web worker that uses comlink to expose the renderPDF function as an asynchronous function:
+
+import { expose } from 'comlink';
+import type { PDFProps } from '../PDF';
+import './workerShim';
+let log = console.log
+
+const renderPDFInWorker = async (props: PDFProps) => {
+  try {
+    const { renderPDF } = await import('../renderPDF');
+    return URL.createObjectURL(await renderPDF(props));
+  } catch (error) {
+    log(error);
+    throw error;
+  }
+};
+
+// for debugging purposes - will override the log method to the callback
+const onProgress = (cb: typeof console.info) => (log = cb);
+
+// easier way to expose function from workers using comlink
+expose({ renderPDf, onProgress });
+
+export type WorkerType = {
+  renderPDf: typeof renderPDf;
+  onProgress: typeof onProgress;
+};
+This code imports the renderPDF function we created earlier, and exposes the renderPDFInWorker as an asynchronous function, which returns the blob URL using comlink. The onProgress function is used for debugging purposes to pipe the output back to main thread console.
+
+Integrating it into the application
+By now having this simple async function, there is no requirement to use React as the main thread ui framework.
+
+The react implementation would look like this:
+
+import { useEffect } from "react";
+import { useAsync } from "react-use";
+import { proxy, wrap } from "comlink";
+import type { WorkerType } from "./workers/pdf.worker";
+import Worker from "./workers/pdf.worker?worker";
+
+export const pdfWorker = wrap<WorkerType>(new Worker());
+// hook up the debugging inside the main thread
+pdfWorker.onProgress(proxy((info: any) => console.log(info)));
+
+export const useRenderPDF = ({
+  title,
+  author,
+  description,
+}: Parameters<WorkerType["renderPDFInWorker"]>[0]) => {
+  const {
+    value: url,
+    loading,
+    error,
+  } = useAsync(
+    async () => pdfWorker.renderPDFInWorker({ title, author, description }),
+    [title, author, description]
+  );
+
+  // clean up the blob after url is no longer returned
+  // otherwise it will cause memory leak
+  useEffect(() => (url ? () => URL.revokeObjectURL(url) : undefined), [url]);
+  return { url, loading, error };
+};
+To import the PDF worker, this example uses vite’s query suffixes import syntax. After that, the worker is wrapped by comlink.
+
+The useRenderPDF hook now takes in the PDF component props as its argument. It then uses the useAsync hook to call the renderPDFInWorker function, passing the component props to it and returning a value, error and loading state.
+
+Finally, the useEffect hook is used to clean up the URL object created by the renderPDFInWorker function to prevent memory leaks.
+
+Improvements & Considerations
+To minimize communication overhead, it was explicitly opted to send the component props instead of the complete v-dom, and thus this implementation is not as flexible as the non web worker implementation.
+
+A potential improvement could therefore be to make it easier to use renderPDFInWorker with multiple different PDFs via the use of the factory pattern and inline workers.
+
+The implementation was only tested in vite and required shims to make @react-pdf/renderer work inside a web worker, which may need to be adapted to work in other bundlers
+
+In vites current setup, it doesn’t allow even ESM web workers to share code chunks with the main bundle. Thus, the bundle will include @react-pdf/renderer, react and all other libraries that both the PDF component and the main bundle uses twice.
+
+Conclusion
+In this article, we’ve explored how to use @react-pdf/renderer inside a web worker to generate PDF files in a non-blocking way. We’ve used the comlink library to communicate with the worker and create a promise-based API wrapper.
+
+
+=== END blog post about web-workers ===
+

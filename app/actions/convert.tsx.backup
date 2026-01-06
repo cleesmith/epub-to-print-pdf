@@ -1,0 +1,117 @@
+'use server';
+
+import React from 'react';
+import path from 'path';
+import { renderToBuffer, Font } from '@react-pdf/renderer';
+import { Page, Text, View, Document, StyleSheet } from '@react-pdf/renderer';
+
+// Register EB Garamond fonts for KDP embedding
+const fontsDir = path.join(process.cwd(), 'public/fonts');
+
+Font.register({
+  family: 'EBGaramond',
+  fonts: [
+    { src: path.join(fontsDir, 'EBGaramond-Regular.ttf') },
+    { src: path.join(fontsDir, 'EBGaramond-Bold.ttf'), fontWeight: 'bold' },
+    { src: path.join(fontsDir, 'EBGaramond-Italic.ttf'), fontStyle: 'italic' },
+    { src: path.join(fontsDir, 'EBGaramond-BoldItalic.ttf'), fontWeight: 'bold', fontStyle: 'italic' },
+  ],
+});
+
+// KDP 6x9 page size in points (72 dpi)
+const KDP_6x9 = { width: 432, height: 648 };
+
+const styles = StyleSheet.create({
+  page: {
+    paddingTop: 72,
+    paddingBottom: 72,
+    paddingLeft: 54,
+    paddingRight: 36,
+    fontFamily: 'EBGaramond',
+    fontSize: 11,
+  },
+  pageNumber: {
+    position: 'absolute',
+    bottom: 36,
+    left: 0,
+    right: 0,
+    textAlign: 'center',
+    fontSize: 10,
+  },
+  chapterTitle: {
+    fontSize: 18,
+    marginBottom: 24,
+    textAlign: 'center',
+  },
+  paragraph: {
+    marginBottom: 12,
+    textAlign: 'justify',
+  },
+});
+
+// Generate 30 sample chapters for KDP test (minimum 24 pages required)
+const chapters = Array.from({ length: 30 }, (_, i) => ({
+  title: `Chapter ${i + 1}`,
+  content: [
+    `This is chapter ${i + 1} of the test document. The PDF is formatted for Amazon KDP 6x9 inch trade paperback.`,
+    'Each chapter starts on a new page with proper margins and typography for professional book publishing.',
+    'The text is set in EB Garamond at 11 points with justified alignment for a traditional book appearance.',
+    `Page ${i + 1} demonstrates the layout and formatting capabilities of react-pdf for KDP publishing.`,
+  ],
+}));
+
+const BookDocument = () => (
+  <Document pageLayout="twoPageLeft">
+    <Page size={KDP_6x9} style={styles.page} wrap>
+      {/* Page numbers - following docs pattern */}
+      <Text
+        style={styles.pageNumber}
+        render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`}
+        fixed
+      />
+
+      {/* Chapters */}
+      {chapters.map((chapter, chapterIndex) => (
+        <View key={chapterIndex} break={chapterIndex > 0}>
+          <Text style={styles.chapterTitle}>{chapter.title}</Text>
+          {chapter.content.map((para, paraIndex) => (
+            <Text key={paraIndex} style={styles.paragraph}>
+              {para}
+            </Text>
+          ))}
+        </View>
+      ))}
+    </Page>
+  </Document>
+);
+
+export interface ConvertResult {
+  success: boolean;
+  pdfBase64?: string;
+  error?: string;
+}
+
+export async function convertEpubToPdf(
+  formData: FormData
+): Promise<ConvertResult> {
+  try {
+    console.log('Server: Starting conversion...');
+    console.log('Server: Creating book document...');
+    const document = <BookDocument />;
+
+    console.log('Server: Calling renderToBuffer...');
+    const pdfBuffer = await renderToBuffer(document);
+    console.log('Server: renderToBuffer completed, size:', pdfBuffer.length);
+
+    const pdfBase64 = Buffer.from(pdfBuffer).toString('base64');
+    console.log('Server: Conversion complete');
+
+    return { success: true, pdfBase64 };
+  } catch (err) {
+    console.error('Server: Conversion error:', err);
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
