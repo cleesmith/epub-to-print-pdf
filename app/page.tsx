@@ -46,7 +46,7 @@ export default function Home() {
 
       if (result.success && result.pdfBase64) {
         setPdfData(result.pdfBase64);
-        setStatus('Done! Click Download to save your PDF.');
+        setStatus('Done! Click Preview to view your PDF.');
       } else {
         setStatus(`Error: ${result.error || 'Unknown error'}`);
       }
@@ -73,20 +73,6 @@ export default function Home() {
     if (!blob) return;
     const url = URL.createObjectURL(blob);
     window.open(url, '_blank');
-  };
-
-  const handleDownload = () => {
-    if (!file) return;
-    const blob = createPdfBlob();
-    if (!blob) return;
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = file.name.replace(/\.epub$/i, '.pdf');
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
   };
 
   return (
@@ -174,23 +160,6 @@ export default function Home() {
           Preview PDF
         </button>
 
-        <button
-          onClick={handleDownload}
-          disabled={!pdfData}
-          style={{
-            padding: '12px 24px',
-            fontSize: '14px',
-            fontWeight: 600,
-            cursor: pdfData ? 'pointer' : 'not-allowed',
-            opacity: pdfData ? 1 : 0.5,
-            backgroundColor: '#10b981',
-            color: 'white',
-            border: 'none',
-            borderRadius: '6px',
-          }}
-        >
-          Download PDF
-        </button>
       </div>
 
       {status && (

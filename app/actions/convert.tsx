@@ -250,24 +250,19 @@ export async function convertEpubToPdf(
   formData: FormData
 ): Promise<ConvertResult> {
   try {
-    console.log('Server: Starting conversion...');
-
     // Get EPUB file from form data
     const epubFile = formData.get('epub') as File;
     if (!epubFile) {
       return { success: false, error: 'No EPUB file provided' };
     }
 
-    console.log('Server: Parsing EPUB:', epubFile.name);
     const epubData = new Uint8Array(await epubFile.arrayBuffer());
     const parsed = await parseEpub(epubData);
-    console.log('Server: Parsed EPUB - Title:', parsed.title, 'Chapters:', parsed.chapters.length);
 
     if (parsed.chapters.length === 0) {
       return { success: false, error: 'No chapters found in EPUB' };
     }
 
-    console.log('Server: Creating book document...');
     const document = (
       <BookDocument
         chapters={parsed.chapters}
@@ -276,13 +271,9 @@ export async function convertEpubToPdf(
       />
     );
 
-    console.log('Server: Calling renderToBuffer...');
     const pdfBuffer = await renderToBuffer(document);
-    console.log('Server: renderToBuffer completed, size:', pdfBuffer.length);
 
     const pdfBase64 = Buffer.from(pdfBuffer).toString('base64');
-    console.log('Server: Conversion complete');
-
     return { success: true, pdfBase64 };
   } catch (err) {
     console.error('Server: Conversion error:', err);
